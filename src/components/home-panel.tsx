@@ -1,18 +1,12 @@
 'use client'
 
-import { Alert, Button, Card, Space, Spin, Tag, Typography } from 'antd'
-import { camelCase, upperFirst } from 'lodash-es'
-import { useHealthQuery } from '@/hooks/use-health-query'
+import { Button, Card, Space, Tag, Typography } from 'antd'
 import { useCounterStore } from '@/stores/use-counter-store'
 
 const { Paragraph, Text, Title } = Typography
 
 export function HomePanel() {
   const { count, decrement, increment, reset } = useCounterStore()
-  const healthQuery = useHealthQuery()
-  const statusLabel = healthQuery.data
-    ? upperFirst(camelCase(healthQuery.data.status))
-    : 'Unknown'
 
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-5xl items-center px-6 py-10">
@@ -22,15 +16,13 @@ export function HomePanel() {
             <Title level={3} className="!mb-0">
               Lost & Found Admin
             </Title>
-            <Tag color={healthQuery.isError ? 'error' : 'success'}>
-              API
-              {' '}
-              {healthQuery.isError ? 'Unavailable' : statusLabel}
+            <Tag color="processing">
+              Frontend Only
             </Tag>
           </div>
 
           <Paragraph className="!mb-0 text-gray-600">
-            Next.js + Ant Design + Tailwind + Axios + React Query + Zustand
+            Next.js + Ant Design + Tailwind + Zustand
           </Paragraph>
 
           <Card size="small" title="Counter Store (zustand)">
@@ -47,35 +39,10 @@ export function HomePanel() {
             </Space>
           </Card>
 
-          <Card size="small" title="Health Query (axios + react-query)">
-            {healthQuery.isPending && <Spin />}
-            {healthQuery.isError && (
-              <Alert
-                type="error"
-                message="Failed to fetch /api/health"
-                description={healthQuery.error.message}
-                showIcon
-              />
-            )}
-            {healthQuery.data && (
-              <Space direction="vertical" size={4}>
-                <Text>
-                  Service:
-                  {' '}
-                  {healthQuery.data.service}
-                </Text>
-                <Text>
-                  Status:
-                  {' '}
-                  {healthQuery.data.status}
-                </Text>
-                <Text>
-                  Timestamp:
-                  {' '}
-                  {new Date(healthQuery.data.timestamp).toLocaleString()}
-                </Text>
-              </Space>
-            )}
+          <Card size="small" title="Static Build">
+            <Text>
+              This project is configured for SSG export and does not include backend APIs.
+            </Text>
           </Card>
         </Space>
       </Card>

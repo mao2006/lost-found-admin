@@ -5,15 +5,13 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
-    "start": "next start",
+    "ssg": "next build --webpack",
     "lint": "eslint",
     "lint:fix": "eslint --fix"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.90.21",
+    "@ant-design/icons": "^6.1.0",
     "antd": "^6.3.0",
-    "axios": "^1.13.5",
-    "lodash-es": "^4.17.23",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
@@ -24,7 +22,6 @@
     "@eslint-react/eslint-plugin": "^2.13.0",
     "@next/eslint-plugin-next": "^16.1.6",
     "@tailwindcss/postcss": "^4",
-    "@types/lodash-es": "^4.17.12",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
