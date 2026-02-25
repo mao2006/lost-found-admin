@@ -1,8 +1,11 @@
 'use client'
 
+import type { AdminRole } from '@/constants/admin-access'
 import { App, Button, Card, Form, Input, Modal, Space, Typography } from 'antd'
 import { useRouter } from 'next/navigation'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { ADMIN_ROLE_LABEL, getDefaultRouteByRole } from '@/constants/admin-access'
+import { useAuthStore } from '@/stores/use-auth-store'
 
 const { Text, Title } = Typography
 
@@ -21,13 +24,31 @@ interface ForgotPasswordFormValues {
   studentNo: string
 }
 
+function resolveRoleByEmployeeNo(employeeNo: string): AdminRole {
+  if (employeeNo === '1')
+    return 'lost_found_admin'
+  if (employeeNo === '2')
+    return 'system_admin'
+
+  return Math.random() > 0.5 ? 'system_admin' : 'lost_found_admin'
+}
+
 export default function LoginPage() {
   const router = useRouter()
   const { message } = App.useApp()
+  const login = useAuthStore(state => state.login)
+  const isLoggedIn = useAuthStore(state => state.isLoggedIn)
+  const role = useAuthStore(state => state.role)
   const [forgotPasswordForm] = Form.useForm<ForgotPasswordFormValues>()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isForgotOpen, setIsForgotOpen] = useState(false)
   const [isForgotSubmitting, setIsForgotSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (isLoggedIn && role) {
+      router.replace(getDefaultRouteByRole(role))
+    }
+  }, [isLoggedIn, role, router])
 
   const openForgotModal = () => {
     setIsForgotOpen(true)
@@ -39,13 +60,20 @@ export default function LoginPage() {
     forgotPasswordForm.resetFields()
   }
 
-  const handleLogin = async (_values: LoginFormValues) => {
+  const handleLogin = async (values: LoginFormValues) => {
     setIsSubmitting(true)
     await new Promise(resolve => setTimeout(resolve, 450))
     setIsSubmitting(false)
 
-    message.success('登录成功')
-    router.push('/review-publish')
+    const employeeNo = values.employeeNo.trim()
+    const loginRole = resolveRoleByEmployeeNo(employeeNo)
+
+    login({
+      employeeNo,
+      role: loginRole,
+    })
+    message.success(`登录成功，当前身份：${ADMIN_ROLE_LABEL[loginRole]}`)
+    router.push(getDefaultRouteByRole(loginRole))
   }
 
   const handleForgotConfirm = async (_values: ForgotPasswordFormValues) => {
@@ -93,6 +121,10 @@ export default function LoginPage() {
           size="large"
           onFinish={handleLogin}
         >
+          <Text type="secondary" className="!mb-4 !block">
+            账号 1 默认进入失物招领管理员，账号 2 默认进入系统管理员，其它账号随机分流。
+          </Text>
+
           <Form.Item
             className="!mb-4"
             label="工号"
@@ -133,7 +165,7 @@ export default function LoginPage() {
         title="忘记密码"
         open={isForgotOpen}
         onCancel={closeForgotModal}
-        onOk={() => router.push('/info-maintenance')}
+        onOk={() => forgotPasswordForm.submit()}
         okText="确认"
         cancelText="取消"
         confirmLoading={isForgotSubmitting}
