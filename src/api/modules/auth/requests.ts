@@ -4,14 +4,9 @@ import { userLoginRequest, userUpdatePasswordRequest } from '@/api/modules/user'
 import { toAdminRole } from '@/api/shared/transforms'
 
 export function loginRequest(payload: LoginRequest): Promise<LoginResponse> {
-  const uid = Number.parseInt(payload.employeeNo.trim(), 10)
-  if (!Number.isInteger(uid)) {
-    throw new RequestError('工号格式不正确')
-  }
-
   return userLoginRequest({
     password: payload.password,
-    uid,
+    username: payload.employeeNo.trim(),
   }).then((result) => {
     const role = toAdminRole(result.user_type)
     if (!role) {

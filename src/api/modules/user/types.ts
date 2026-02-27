@@ -1,6 +1,6 @@
 export interface UserLoginRequest {
+  username: string
   password: string
-  uid: number
 }
 
 export interface UserLoginResponse {
