@@ -4,6 +4,8 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 
 interface LoginPayload {
   employeeNo: string
+  token: string
+  userId: number
   role: AdminRole
 }
 
@@ -13,6 +15,8 @@ interface AuthStore {
   login: (payload: LoginPayload) => void
   logout: () => void
   role: AdminRole | null
+  token: string
+  userId: number | null
 }
 
 export const useAuthStore = create<AuthStore>()(
@@ -21,11 +25,15 @@ export const useAuthStore = create<AuthStore>()(
       employeeNo: '',
       isLoggedIn: false,
       role: null,
-      login: ({ employeeNo, role }) => {
+      token: '',
+      userId: null,
+      login: ({ employeeNo, role, token, userId }) => {
         set({
           employeeNo,
           isLoggedIn: true,
           role,
+          token,
+          userId,
         })
       },
       logout: () => {
@@ -33,6 +41,8 @@ export const useAuthStore = create<AuthStore>()(
           employeeNo: '',
           isLoggedIn: false,
           role: null,
+          token: '',
+          userId: null,
         })
       },
     }),

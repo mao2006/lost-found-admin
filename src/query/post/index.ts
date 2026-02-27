@@ -1,0 +1,1 @@
+export { usePostListQuery } from './queries'

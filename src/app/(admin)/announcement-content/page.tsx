@@ -1,14 +1,19 @@
 'use client'
 
-import type { PublishKind, RegionalAnnouncement, ReviewPublishPost } from '@/mock/system-admin'
+import { useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, Descriptions, Empty, Flex, Image, Input, Segmented, Space, Tag, Typography } from 'antd'
 import { useMemo, useState } from 'react'
-import { REGIONAL_ANNOUNCEMENTS, REVIEW_PUBLISH_POSTS } from '@/mock/system-admin'
+import { toPublishKind } from '@/api/shared/transforms'
+import { useAdminPendingDetailQuery, useDeleteAdminPostMutation } from '@/query/admin'
+import { useAnnouncementReviewListQuery, useApproveAnnouncementMutation, usePublishAnnouncementMutation } from '@/query/announcement'
+import { usePostListQuery } from '@/query/post'
+import { queryKeys } from '@/query/query-keys'
 import { formatDate, formatDateTime } from '@/utils/admin-mock'
 
 const { TextArea } = Input
 
 type MainTab = 'global' | 'regional' | 'review'
+type PublishKind = 'lost' | 'found'
 
 const KIND_LABEL: Record<PublishKind, string> = {
   lost: '失物',
@@ -17,18 +22,30 @@ const KIND_LABEL: Record<PublishKind, string> = {
 
 export default function AnnouncementContentPage() {
   const { message } = App.useApp()
+  const queryClient = useQueryClient()
+
   const [activeTab, setActiveTab] = useState<MainTab>('global')
+
+  const [globalTitle, setGlobalTitle] = useState('系统公告')
   const [globalContent, setGlobalContent] = useState('')
-  const [regionalAnnouncements, setRegionalAnnouncements] = useState<RegionalAnnouncement[]>([...REGIONAL_ANNOUNCEMENTS])
-  const [selectedAnnouncementId, setSelectedAnnouncementId] = useState<string | null>(REGIONAL_ANNOUNCEMENTS[0]?.id ?? null)
+
+  const [selectedAnnouncementId, setSelectedAnnouncementId] = useState<number | null>(null)
 
   const [postKind, setPostKind] = useState<PublishKind>('lost')
-  const [reviewPosts, setReviewPosts] = useState<ReviewPublishPost[]>([...REVIEW_PUBLISH_POSTS])
-  const [selectedPostId, setSelectedPostId] = useState<string | null>(null)
+  const [selectedPostId, setSelectedPostId] = useState<number | null>(null)
+
+  const reviewListQuery = useAnnouncementReviewListQuery()
+  const publishMutation = usePublishAnnouncementMutation()
+  const approveMutation = useApproveAnnouncementMutation()
+
+  const postListQuery = usePostListQuery({ page: 1, page_size: 200 })
+  const postDetailQuery = useAdminPendingDetailQuery(selectedPostId)
+  const deletePostMutation = useDeleteAdminPostMutation()
 
   const sortedAnnouncements = useMemo(
-    () => [...regionalAnnouncements].sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()),
-    [regionalAnnouncements],
+    () => [...(reviewListQuery.data?.list ?? [])]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    [reviewListQuery.data?.list],
   )
 
   const selectedAnnouncement = useMemo(
@@ -36,36 +53,35 @@ export default function AnnouncementContentPage() {
     [selectedAnnouncementId, sortedAnnouncements],
   )
 
-  const visibleReviewPosts = useMemo(() => {
-    return reviewPosts
-      .filter(post => post.kind === postKind)
-      .sort((a, b) => new Date(b.eventTime).getTime() - new Date(a.eventTime).getTime())
-  }, [postKind, reviewPosts])
-
-  const selectedPost = useMemo(
-    () => reviewPosts.find(post => post.id === selectedPostId) ?? null,
-    [reviewPosts, selectedPostId],
+  const visibleReviewPosts = useMemo(
+    () => (postListQuery.data?.list ?? [])
+      .filter(post => toPublishKind(post.publish_type) === postKind)
+      .sort((a, b) => new Date(b.event_time).getTime() - new Date(a.event_time).getTime()),
+    [postKind, postListQuery.data?.list],
   )
 
-  const handleApproveAnnouncement = () => {
+  const handleApproveAnnouncement = async () => {
     if (!selectedAnnouncement)
       return
 
-    setRegionalAnnouncements(prev => prev.map(item => (
-      item.id === selectedAnnouncement.id
-        ? { ...item, status: 'approved' }
-        : item
-    )))
+    await approveMutation.mutateAsync({ id: selectedAnnouncement.id })
     message.success('区域公告审核通过')
+
+    await queryClient.invalidateQueries({ queryKey: queryKeys.announcement.reviewList() })
   }
 
-  const handleDeletePost = () => {
-    if (!selectedPost)
+  const handleDeletePost = async () => {
+    if (!selectedPostId)
       return
 
-    setReviewPosts(prev => prev.filter(item => item.id !== selectedPost.id))
+    await deletePostMutation.mutateAsync({ post_id: selectedPostId })
     setSelectedPostId(null)
     message.success('发布信息已删除')
+
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['post', 'list'] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.admin.pendingList() }),
+    ])
   }
 
   return (
@@ -92,18 +108,33 @@ export default function AnnouncementContentPage() {
       {activeTab === 'global' && (
         <Card title="发布全局公告">
           <Space direction="vertical" size={12} className="w-full">
+            <Input
+              value={globalTitle}
+              maxLength={100}
+              placeholder="请输入公告标题（限100字）"
+              onChange={event => setGlobalTitle(event.target.value)}
+            />
+
             <TextArea
               rows={8}
-              maxLength={1000}
+              maxLength={5000}
               value={globalContent}
-              placeholder="请输入公告内容（限1000字）"
+              placeholder="请输入公告内容（限5000字）"
               onChange={event => setGlobalContent(event.target.value)}
             />
+
             <Button
               type="primary"
               className="w-fit"
-              disabled={!globalContent.trim()}
-              onClick={() => {
+              loading={publishMutation.isPending}
+              disabled={!globalTitle.trim() || !globalContent.trim()}
+              onClick={async () => {
+                await publishMutation.mutateAsync({
+                  content: globalContent.trim(),
+                  title: globalTitle.trim(),
+                  type: 'SYSTEM',
+                })
+
                 setGlobalContent('')
                 message.success('全局公告已发布')
               }}
@@ -116,7 +147,7 @@ export default function AnnouncementContentPage() {
 
       {activeTab === 'regional' && (
         <Flex vertical gap={16}>
-          <Card title="区域公告列表">
+          <Card title="区域公告列表" loading={reviewListQuery.isLoading}>
             <Space direction="vertical" size={10} className="w-full">
               {sortedAnnouncements.length === 0 && <Empty description="暂无区域公告" />}
               {sortedAnnouncements.map(item => (
@@ -129,11 +160,9 @@ export default function AnnouncementContentPage() {
                   <Flex justify="space-between" align="center" className="w-full gap-2">
                     <Space wrap>
                       <Typography.Text strong>{item.title}</Typography.Text>
-                      <Tag color={item.status === 'approved' ? 'success' : 'processing'}>
-                        {item.status === 'approved' ? '已通过' : '待审核'}
-                      </Tag>
+                      <Tag color="processing">待审核</Tag>
                     </Space>
-                    <Typography.Text type="secondary">{formatDate(item.publishedAt)}</Typography.Text>
+                    <Typography.Text type="secondary">{formatDate(item.created_at)}</Typography.Text>
                   </Flex>
                 </Button>
               ))}
@@ -146,17 +175,15 @@ export default function AnnouncementContentPage() {
                 <Typography.Title level={5} className="!mb-0">
                   {selectedAnnouncement.title}
                 </Typography.Title>
+
                 <Typography.Paragraph className="!mb-0">
                   {selectedAnnouncement.content}
                 </Typography.Paragraph>
+
                 <Flex justify="space-between" align="center">
-                  <Typography.Text type="secondary">{formatDate(selectedAnnouncement.publishedAt)}</Typography.Text>
-                  <Button
-                    type="primary"
-                    disabled={selectedAnnouncement.status === 'approved'}
-                    onClick={handleApproveAnnouncement}
-                  >
-                    已通过
+                  <Typography.Text type="secondary">{formatDate(selectedAnnouncement.created_at)}</Typography.Text>
+                  <Button type="primary" loading={approveMutation.isPending} onClick={handleApproveAnnouncement}>
+                    审核通过
                   </Button>
                 </Flex>
               </Space>
@@ -178,8 +205,8 @@ export default function AnnouncementContentPage() {
             />
           </Card>
 
-          {!selectedPost && (
-            <Card title="发布信息列表">
+          {!selectedPostId && (
+            <Card title="发布信息列表" loading={postListQuery.isLoading}>
               <Space direction="vertical" size={10} className="w-full">
                 {visibleReviewPosts.length === 0 && <Empty description="暂无可审核发布信息" />}
                 {visibleReviewPosts.map(post => (
@@ -191,11 +218,11 @@ export default function AnnouncementContentPage() {
                   >
                     <Flex justify="space-between" align="center" className="w-full gap-2">
                       <Space wrap>
-                        <Tag color={post.kind === 'lost' ? 'gold' : 'blue'}>{KIND_LABEL[post.kind]}</Tag>
-                        <Typography.Text>{post.itemName}</Typography.Text>
-                        <Typography.Text type="secondary">{post.itemType}</Typography.Text>
+                        <Tag color={toPublishKind(post.publish_type) === 'lost' ? 'gold' : 'blue'}>{KIND_LABEL[toPublishKind(post.publish_type)]}</Tag>
+                        <Typography.Text>{post.item_name}</Typography.Text>
+                        <Typography.Text type="secondary">{post.item_type_other || post.item_type}</Typography.Text>
                       </Space>
-                      <Typography.Text type="secondary">{formatDateTime(post.eventTime)}</Typography.Text>
+                      <Typography.Text type="secondary">{formatDateTime(post.event_time)}</Typography.Text>
                     </Flex>
                   </Button>
                 ))}
@@ -203,48 +230,51 @@ export default function AnnouncementContentPage() {
             </Card>
           )}
 
-          {selectedPost && (
-            <Card title="物品详情页">
-              <Space direction="vertical" size={16} className="w-full">
-                <Descriptions
-                  bordered
-                  column={{ xs: 1, md: 2 }}
-                  items={[
-                    { key: 'kind', label: '发布类型', children: KIND_LABEL[selectedPost.kind] },
-                    { key: 'type', label: '物品类型', children: selectedPost.itemType },
-                    { key: 'name', label: '名称', children: selectedPost.itemName },
-                    { key: 'status', label: '物品状态', children: selectedPost.status },
-                    { key: 'features', label: '描述特征', children: selectedPost.features },
-                    { key: 'campus', label: '拾取/丢失校区', children: selectedPost.campus },
-                    { key: 'location', label: '具体地点', children: selectedPost.locationDetail },
-                    { key: 'time', label: '时间范围', children: formatDateTime(selectedPost.eventTime) },
-                    { key: 'storage', label: '存放地点', children: selectedPost.storageLocation },
-                    { key: 'claim', label: '认领人数', children: selectedPost.claimCount },
-                    { key: 'contact', label: '联系方式', children: selectedPost.contactPhone },
-                    {
-                      key: 'reward',
-                      label: '有无悬赏',
-                      children: selectedPost.hasReward ? `有（¥${selectedPost.rewardAmount ?? 0}）` : '无',
-                    },
-                  ]}
-                />
-                <Flex wrap gap={8}>
-                  {selectedPost.photos.map((photo, index) => (
-                    <Image
-                      key={`${selectedPost.id}-${photo}`}
-                      src={photo}
-                      alt={`${selectedPost.itemName}-${index + 1}`}
-                      width={160}
-                      height={112}
-                      className="rounded-lg object-cover"
-                    />
-                  ))}
-                </Flex>
-                <Flex gap={10}>
-                  <Button onClick={() => setSelectedPostId(null)}>返回</Button>
-                  <Button danger type="primary" onClick={handleDeletePost}>删除</Button>
-                </Flex>
-              </Space>
+          {selectedPostId && (
+            <Card title="物品详情页" loading={postDetailQuery.isLoading}>
+              {postDetailQuery.data && (
+                <Space direction="vertical" size={16} className="w-full">
+                  <Descriptions
+                    bordered
+                    column={{ xs: 1, md: 2 }}
+                    items={[
+                      { key: 'kind', label: '发布类型', children: KIND_LABEL[toPublishKind(postDetailQuery.data.publish_type)] },
+                      { key: 'type', label: '物品类型', children: postDetailQuery.data.item_type_other || postDetailQuery.data.item_type },
+                      { key: 'name', label: '名称', children: postDetailQuery.data.item_name },
+                      { key: 'status', label: '物品状态', children: postDetailQuery.data.status },
+                      { key: 'features', label: '描述特征', children: postDetailQuery.data.features },
+                      { key: 'location', label: '具体地点', children: postDetailQuery.data.location },
+                      { key: 'time', label: '时间范围', children: formatDateTime(postDetailQuery.data.event_time) },
+                      { key: 'contact', label: '联系方式', children: postDetailQuery.data.contact_phone },
+                    ]}
+                  />
+
+                  <Flex wrap gap={8}>
+                    {postDetailQuery.data.images.map((photo, index) => (
+                      <Image
+                        key={`${postDetailQuery.data?.id}-${photo}`}
+                        src={photo}
+                        alt={`${postDetailQuery.data?.item_name}-${index + 1}`}
+                        width={160}
+                        height={112}
+                        className="rounded-lg object-cover"
+                      />
+                    ))}
+                  </Flex>
+
+                  <Flex gap={10}>
+                    <Button onClick={() => setSelectedPostId(null)}>返回</Button>
+                    <Button
+                      danger
+                      type="primary"
+                      loading={deletePostMutation.isPending}
+                      onClick={handleDeletePost}
+                    >
+                      删除
+                    </Button>
+                  </Flex>
+                </Space>
+              )}
             </Card>
           )}
         </Space>

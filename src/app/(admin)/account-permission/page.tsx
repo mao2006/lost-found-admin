@@ -1,49 +1,60 @@
 'use client'
 
 import type { ColumnsType } from 'antd/es/table'
-import type { AccountRecord, AccountRole } from '@/mock/system-admin'
+import { useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, Flex, Form, Input, Modal, Radio, Segmented, Select, Space, Table, Tag, Typography } from 'antd'
 import { useMemo, useState } from 'react'
-import { SYSTEM_ACCOUNTS } from '@/mock/system-admin'
+import { normalizeDateTime, toAccountRoleLabel, toDisableDurationParam } from '@/api/shared/transforms'
+import {
+  useAccountListQuery,
+  useCreateAccountMutation,
+  useDisableAccountMutation,
+  useEnableAccountMutation,
+  useSendSystemNotificationMutation,
+  useUpdateAccountMutation,
+} from '@/query/account'
+import { queryKeys } from '@/query/query-keys'
 import { formatDateTime } from '@/utils/admin-mock'
 
 const { Text } = Typography
 
 type MainTab = 'manage' | 'create'
-type CreateTab = 'student_teacher' | 'admin'
 type DisableDuration = '7d' | '1m' | '6m' | '1y'
+type AccountUserType = 'STUDENT' | 'ADMIN' | 'SYSTEM_ADMIN'
+
+interface AccountRow {
+  disabledUntil: string | null
+  id: number
+  name: string
+  uid: number
+  userType: string
+}
 
 interface DisableModalState {
-  account: AccountRecord | null
+  account: AccountRow | null
   duration: DisableDuration | null
   open: boolean
 }
 
 interface RestoreModalState {
-  account: AccountRecord | null
+  account: AccountRow | null
   open: boolean
 }
 
 interface NoticeModalState {
-  account: AccountRecord | null
+  account: AccountRow | null
   content: string
   open: boolean
   sendType: 'all' | 'single'
+  title: string
 }
 
 interface CreateAccountValues {
   idCard: string
   name: string
   password: string
-  role: AccountRole
+  userType: AccountUserType
   userNo: string
-}
-
-const ROLE_LABEL: Record<AccountRole, string> = {
-  student: '学生',
-  teacher: '老师',
-  lost_found_admin: '失物招领管理员',
-  system_admin: '系统管理员',
 }
 
 const ID_CARD_PATTERN = /^\d{17}[\dX]$/i
@@ -55,26 +66,15 @@ const DISABLE_DURATION_OPTIONS: { label: string, value: DisableDuration }[] = [
   { label: '1年', value: '1y' },
 ]
 
-function buildDisabledUntil(duration: DisableDuration) {
-  const nextDate = new Date()
-  const daysMap: Record<DisableDuration, number> = {
-    '7d': 7,
-    '1m': 30,
-    '6m': 180,
-    '1y': 365,
-  }
-
-  nextDate.setDate(nextDate.getDate() + daysMap[duration])
-  return nextDate.toISOString()
-}
-
 export default function AccountPermissionPage() {
   const { message } = App.useApp()
+  const queryClient = useQueryClient()
+
   const [activeTab, setActiveTab] = useState<MainTab>('manage')
-  const [accounts, setAccounts] = useState<AccountRecord[]>([...SYSTEM_ACCOUNTS])
+
   const [searchKeyword, setSearchKeyword] = useState('')
-  const [queryKeyword, setQueryKeyword] = useState('')
-  const [hasQueried, setHasQueried] = useState(false)
+  const [queryUid, setQueryUid] = useState<number | undefined>()
+  const [nameFilter, setNameFilter] = useState('')
 
   const [disableState, setDisableState] = useState<DisableModalState>({
     open: false,
@@ -90,55 +90,73 @@ export default function AccountPermissionPage() {
     account: null,
     content: '',
     sendType: 'single',
+    title: '系统通知',
   })
 
-  const [createTab, setCreateTab] = useState<CreateTab>('student_teacher')
-  const [createSuccess, setCreateSuccess] = useState(false)
   const [createForm] = Form.useForm<CreateAccountValues>()
 
-  const displayedAccounts = useMemo(() => {
-    if (!hasQueried)
-      return accounts
+  const listQuery = useAccountListQuery(queryUid)
+  const createMutation = useCreateAccountMutation()
+  const disableMutation = useDisableAccountMutation()
+  const enableMutation = useEnableAccountMutation()
+  const updateMutation = useUpdateAccountMutation()
+  const sendNotificationMutation = useSendSystemNotificationMutation()
 
-    const keyword = queryKeyword.trim().toLowerCase()
-    return accounts.filter((account) => {
-      return account.userNo.includes(keyword) || account.name.toLowerCase().includes(keyword)
-    })
-  }, [accounts, hasQueried, queryKeyword])
+  const isWorking = createMutation.isPending
+    || disableMutation.isPending
+    || enableMutation.isPending
+    || updateMutation.isPending
+    || sendNotificationMutation.isPending
 
-  const columns: ColumnsType<AccountRecord> = [
+  const accountRows = useMemo<AccountRow[]>(
+    () => (listQuery.data?.list ?? []).map(item => ({
+      disabledUntil: normalizeDateTime(item.disabled_until),
+      id: item.id,
+      name: item.name,
+      uid: item.uid,
+      userType: item.user_type,
+    })),
+    [listQuery.data?.list],
+  )
+
+  const displayedAccounts = useMemo(
+    () => accountRows.filter((item) => {
+      if (!nameFilter.trim())
+        return true
+
+      return item.name.includes(nameFilter.trim())
+    }),
+    [accountRows, nameFilter],
+  )
+
+  const columns: ColumnsType<AccountRow> = [
     {
       title: '工号/学号',
-      dataIndex: 'userNo',
-      key: 'userNo',
+      dataIndex: 'uid',
+      key: 'uid',
       width: 120,
     },
     {
       title: '姓名',
       dataIndex: 'name',
       key: 'name',
-      width: 100,
-    },
-    {
-      title: '身份证号',
-      dataIndex: 'idCard',
-      key: 'idCard',
-      width: 180,
+      width: 120,
     },
     {
       title: '身份',
-      dataIndex: 'role',
-      key: 'role',
-      width: 170,
-      render: role => ROLE_LABEL[role as AccountRole],
+      dataIndex: 'userType',
+      key: 'userType',
+      width: 180,
+      render: value => toAccountRoleLabel(value as string),
     },
     {
       title: '状态',
       key: 'status',
-      width: 190,
+      width: 210,
       render: (_, record) => {
         if (!record.disabledUntil)
           return <Tag color="success">正常</Tag>
+
         return (
           <Tag color="warning">
             禁用至
@@ -150,12 +168,12 @@ export default function AccountPermissionPage() {
     {
       title: '操作',
       key: 'actions',
-      width: 320,
+      width: 360,
       render: (_, record) => (
         <Flex wrap gap={8}>
           <Button
             size="small"
-            disabled={Boolean(record.disabledUntil)}
+            disabled={Boolean(record.disabledUntil) || isWorking}
             onClick={() => {
               setDisableState({
                 open: true,
@@ -166,9 +184,10 @@ export default function AccountPermissionPage() {
           >
             禁用
           </Button>
+
           <Button
             size="small"
-            disabled={!record.disabledUntil}
+            disabled={!record.disabledUntil || isWorking}
             onClick={() => {
               setRestoreState({
                 open: true,
@@ -178,16 +197,34 @@ export default function AccountPermissionPage() {
           >
             恢复
           </Button>
+
+          <Button
+            size="small"
+            disabled={isWorking}
+            onClick={async () => {
+              await updateMutation.mutateAsync({
+                id: record.id,
+                reset_password: true,
+                user_type: record.userType as AccountUserType,
+              })
+              message.success('密码已重置')
+            }}
+          >
+            重置密码
+          </Button>
+
           <Button
             size="small"
             type="primary"
             ghost
+            disabled={isWorking}
             onClick={() => {
               setNoticeState({
                 open: true,
                 account: record,
                 content: '',
                 sendType: 'single',
+                title: '系统通知',
               })
             }}
           >
@@ -198,37 +235,28 @@ export default function AccountPermissionPage() {
     },
   ]
 
-  const handleQuery = () => {
-    setHasQueried(true)
-    setQueryKeyword(searchKeyword)
+  const reloadList = async () => {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.account.list({ uid: queryUid }) })
+    await queryClient.invalidateQueries({ queryKey: ['account', 'list'] })
   }
 
-  const handleCreateConfirm = (values: CreateAccountValues) => {
-    const nextRecord: AccountRecord = {
-      id: `acc-${Date.now()}`,
-      name: values.name,
-      userNo: values.userNo,
-      idCard: values.idCard,
-      role: values.role,
-      disabledUntil: null,
+  const handleQuery = () => {
+    const trimmed = searchKeyword.trim()
+
+    if (!trimmed) {
+      setQueryUid(undefined)
+      setNameFilter('')
+      return
     }
 
-    setAccounts(prev => [nextRecord, ...prev])
-    setCreateSuccess(true)
-    createForm.resetFields()
-    createForm.setFieldsValue({
-      role: createTab === 'student_teacher' ? 'student' : 'lost_found_admin',
-    })
-    message.success('创建成功')
-  }
+    if (ONLY_NUMBER_PATTERN.test(trimmed)) {
+      setQueryUid(Number.parseInt(trimmed, 10))
+      setNameFilter('')
+      return
+    }
 
-  const handleCreateTabChange = (nextTab: CreateTab) => {
-    setCreateTab(nextTab)
-    setCreateSuccess(false)
-    createForm.resetFields()
-    createForm.setFieldsValue({
-      role: nextTab === 'student_teacher' ? 'student' : 'lost_found_admin',
-    })
+    setQueryUid(undefined)
+    setNameFilter(trimmed)
   }
 
   return (
@@ -257,17 +285,11 @@ export default function AccountPermissionPage() {
             <Flex wrap gap={10} align="center">
               <Input
                 value={searchKeyword}
-                placeholder="可按照学号/工号、姓名搜索"
+                placeholder="按学号/工号或姓名搜索"
                 className="w-full min-w-56 md:w-96"
                 onChange={event => setSearchKeyword(event.target.value)}
               />
-              <Button
-                type="primary"
-                disabled={!searchKeyword.trim()}
-                onClick={handleQuery}
-              >
-                查询
-              </Button>
+              <Button type="primary" onClick={handleQuery}>查询</Button>
               <Button
                 onClick={() => {
                   setNoticeState({
@@ -275,35 +297,33 @@ export default function AccountPermissionPage() {
                     account: null,
                     content: '',
                     sendType: 'all',
+                    title: '系统通知',
                   })
                 }}
               >
                 发送全体系统通知
               </Button>
-              {hasQueried && (
-                <Button
-                  onClick={() => {
-                    setHasQueried(false)
-                    setSearchKeyword('')
-                    setQueryKeyword('')
-                  }}
-                >
-                  清空查询
-                </Button>
-              )}
+              <Button
+                onClick={() => {
+                  setQueryUid(undefined)
+                  setNameFilter('')
+                  setSearchKeyword('')
+                }}
+              >
+                清空查询
+              </Button>
             </Flex>
           </Card>
 
-          <Card title={hasQueried ? '搜索结果' : '账号列表'}>
+          <Card title="账号列表">
             <Table
               rowKey="id"
+              loading={listQuery.isLoading}
               dataSource={displayedAccounts}
               columns={columns}
               scroll={{ x: 1200 }}
               pagination={{ pageSize: 8 }}
-              locale={{
-                emptyText: hasQueried ? '未查询到相关账号' : '暂无账号数据',
-              }}
+              locale={{ emptyText: '暂无账号数据' }}
             />
           </Card>
         </Space>
@@ -311,126 +331,108 @@ export default function AccountPermissionPage() {
 
       {activeTab === 'create' && (
         <Card>
-          <Space direction="vertical" size={16} className="w-full">
-            <Segmented
-              value={createTab}
-              options={[
-                { label: '学生/老师', value: 'student_teacher' },
-                { label: '失物招领管理员/系统管理员', value: 'admin' },
+          <Form<CreateAccountValues>
+            form={createForm}
+            layout="vertical"
+            requiredMark={false}
+            initialValues={{
+              userType: 'STUDENT',
+            }}
+            onValuesChange={(changedValues) => {
+              if (changedValues.idCard && ONLY_NUMBER_PATTERN.test(changedValues.idCard)) {
+                const autoPassword = changedValues.idCard.slice(-6)
+                if (autoPassword.length === 6)
+                  createForm.setFieldValue('password', autoPassword)
+              }
+            }}
+            onFinish={async (values) => {
+              const uid = Number.parseInt(values.userNo, 10)
+              if (!Number.isInteger(uid)) {
+                message.warning('学号/工号格式不正确')
+                return
+              }
+
+              await createMutation.mutateAsync({
+                id_card: values.idCard,
+                name: values.name,
+                password: values.password,
+                uid,
+                user_type: values.userType,
+              })
+
+              message.success('创建成功')
+              createForm.resetFields()
+              createForm.setFieldValue('userType', 'STUDENT')
+              await reloadList()
+            }}
+          >
+            <Form.Item
+              label="姓名"
+              name="name"
+              rules={[
+                { required: true, message: '请输入姓名' },
+                { max: 10, message: '姓名最多 10 字' },
               ]}
-              onChange={value => handleCreateTabChange(value as CreateTab)}
-            />
-
-            <Form<CreateAccountValues>
-              form={createForm}
-              layout="vertical"
-              requiredMark={false}
-              initialValues={{
-                role: 'student',
-              }}
-              onValuesChange={(changedValues, allValues) => {
-                if (changedValues.idCard && createTab === 'student_teacher' && ONLY_NUMBER_PATTERN.test(changedValues.idCard)) {
-                  const autoPassword = changedValues.idCard.slice(-6)
-                  if (autoPassword.length === 6) {
-                    createForm.setFieldValue('password', autoPassword)
-                  }
-                }
-                if (changedValues.role) {
-                  setCreateSuccess(false)
-                }
-                if (allValues.password) {
-                  createForm.validateFields(['password']).catch(() => {})
-                }
-              }}
-              onFinish={handleCreateConfirm}
             >
-              <Form.Item
-                label="姓名"
-                name="name"
-                rules={[
-                  { required: true, message: '请输入姓名' },
-                  { max: 10, message: '姓名最多 10 字' },
-                ]}
-              >
-                <Input placeholder="请输入姓名" />
-              </Form.Item>
+              <Input placeholder="请输入姓名" />
+            </Form.Item>
 
-              <Form.Item
-                label="学号/工号"
-                name="userNo"
-                rules={[
-                  { required: true, message: '请输入学号/工号' },
-                  {
-                    validator(_, value) {
-                      if (!value || ONLY_NUMBER_PATTERN.test(value))
-                        return Promise.resolve()
-                      return Promise.reject(new Error('学号/工号仅支持数字'))
-                    },
+            <Form.Item
+              label="学号/工号"
+              name="userNo"
+              rules={[
+                { required: true, message: '请输入学号/工号' },
+                {
+                  validator(_, value) {
+                    if (!value || ONLY_NUMBER_PATTERN.test(value))
+                      return Promise.resolve()
+                    return Promise.reject(new Error('学号/工号仅支持数字'))
                   },
+                },
+              ]}
+            >
+              <Input placeholder="仅数字" />
+            </Form.Item>
+
+            <Form.Item
+              label="身份证号"
+              name="idCard"
+              rules={[
+                { required: true, message: '请输入身份证号' },
+                { pattern: ID_CARD_PATTERN, message: '请输入合法身份证号' },
+              ]}
+            >
+              <Input placeholder="18 位身份证号" />
+            </Form.Item>
+
+            <Form.Item
+              label="身份"
+              name="userType"
+              rules={[{ required: true, message: '请选择身份' }]}
+            >
+              <Select
+                options={[
+                  { label: '学生', value: 'STUDENT' },
+                  { label: '失物招领管理员', value: 'ADMIN' },
+                  { label: '系统管理员', value: 'SYSTEM_ADMIN' },
                 ]}
-              >
-                <Input placeholder="仅数字" />
-              </Form.Item>
+              />
+            </Form.Item>
 
-              <Form.Item
-                label="身份证号"
-                name="idCard"
-                rules={[
-                  { required: true, message: '请输入身份证号' },
-                  { pattern: ID_CARD_PATTERN, message: '请输入合法身份证号' },
-                ]}
-              >
-                <Input placeholder="18 位身份证号" />
-              </Form.Item>
+            <Form.Item
+              label="密码"
+              name="password"
+              rules={[
+                { required: true, message: '请输入密码' },
+                { min: 6, message: '密码至少 6 位' },
+                { max: 18, message: '密码最多 18 位' },
+              ]}
+            >
+              <Input placeholder="默认可用身份证后六位" />
+            </Form.Item>
 
-              <Form.Item
-                label="身份"
-                name="role"
-                rules={[{ required: true, message: '请选择身份' }]}
-              >
-                <Select
-                  options={
-                    createTab === 'student_teacher'
-                      ? [
-                          { label: ROLE_LABEL.student, value: 'student' },
-                          { label: ROLE_LABEL.teacher, value: 'teacher' },
-                        ]
-                      : [
-                          { label: ROLE_LABEL.lost_found_admin, value: 'lost_found_admin' },
-                          { label: ROLE_LABEL.system_admin, value: 'system_admin' },
-                        ]
-                  }
-                />
-              </Form.Item>
-
-              <Form.Item
-                label="密码"
-                name="password"
-                rules={[
-                  { required: true, message: '请输入密码' },
-                  {
-                    validator(_, value) {
-                      if (!value || ONLY_NUMBER_PATTERN.test(value))
-                        return Promise.resolve()
-                      return Promise.reject(new Error('密码仅支持数字'))
-                    },
-                  },
-                ]}
-              >
-                <Input
-                  placeholder={createTab === 'student_teacher' ? '初始密码默认为身份证后六位' : '分配的密码'}
-                />
-              </Form.Item>
-
-              <Button type="primary" htmlType="submit">确认</Button>
-            </Form>
-
-            {createSuccess && (
-              <Card size="small">
-                <Text className="text-sky-600">创建成功！</Text>
-              </Card>
-            )}
-          </Space>
+            <Button type="primary" htmlType="submit" loading={createMutation.isPending}>确认</Button>
+          </Form>
         </Card>
       )}
 
@@ -439,31 +441,24 @@ export default function AccountPermissionPage() {
         open={disableState.open}
         okText="确认"
         cancelText="返回"
-        okButtonProps={{ disabled: !disableState.duration }}
+        okButtonProps={{ disabled: !disableState.duration, loading: disableMutation.isPending }}
         onCancel={() => {
-          setDisableState({
-            open: false,
-            account: null,
-            duration: null,
-          })
+          if (disableMutation.isPending)
+            return
+
+          setDisableState({ open: false, account: null, duration: null })
         }}
-        onOk={() => {
+        onOk={async () => {
           if (!disableState.account || !disableState.duration)
             return
 
-          const disabledUntil = buildDisabledUntil(disableState.duration)
-          setAccounts(prev => prev.map(account => (
-            account.id === disableState.account?.id
-              ? { ...account, disabledUntil }
-              : account
-          )))
-
-          message.success('账号已禁用')
-          setDisableState({
-            open: false,
-            account: null,
-            duration: null,
+          await disableMutation.mutateAsync({
+            duration: toDisableDurationParam(disableState.duration),
+            id: disableState.account.id,
           })
+          message.success('账号已禁用')
+          setDisableState({ open: false, account: null, duration: null })
+          await reloadList()
         }}
       >
         <Radio.Group
@@ -478,25 +473,21 @@ export default function AccountPermissionPage() {
         open={restoreState.open}
         okText="确认"
         cancelText="返回"
+        okButtonProps={{ loading: enableMutation.isPending }}
         onCancel={() => {
-          setRestoreState({
-            open: false,
-            account: null,
-          })
+          if (enableMutation.isPending)
+            return
+
+          setRestoreState({ open: false, account: null })
         }}
-        onOk={() => {
+        onOk={async () => {
           if (!restoreState.account)
             return
-          setAccounts(prev => prev.map(account => (
-            account.id === restoreState.account?.id
-              ? { ...account, disabledUntil: null }
-              : account
-          )))
+
+          await enableMutation.mutateAsync({ id: restoreState.account.id })
           message.success('账号已恢复')
-          setRestoreState({
-            open: false,
-            account: null,
-          })
+          setRestoreState({ open: false, account: null })
+          await reloadList()
         }}
       >
         <Text>确认恢复该账号？</Text>
@@ -507,38 +498,53 @@ export default function AccountPermissionPage() {
         open={noticeState.open}
         okText="确认"
         cancelText="返回"
-        okButtonProps={{ disabled: !noticeState.content.trim() }}
+        okButtonProps={{ disabled: !noticeState.content.trim(), loading: sendNotificationMutation.isPending }}
         onCancel={() => {
-          setNoticeState({
+          if (sendNotificationMutation.isPending)
+            return
+
+          setNoticeState(prev => ({
+            ...prev,
             open: false,
             account: null,
             content: '',
-            sendType: noticeState.sendType,
-          })
+          }))
         }}
-        onOk={() => {
+        onOk={async () => {
           if (!noticeState.content.trim())
             return
-          message.success(
-            noticeState.sendType === 'all'
-              ? '全体系统通知已发送'
-              : '系统通知已发送',
-          )
-          setNoticeState({
+
+          await sendNotificationMutation.mutateAsync({
+            content: noticeState.content.trim(),
+            is_global: noticeState.sendType === 'all',
+            title: noticeState.title.trim() || '系统通知',
+            user_id: noticeState.sendType === 'single' ? noticeState.account?.id : undefined,
+          })
+
+          message.success(noticeState.sendType === 'all' ? '全体系统通知已发送' : '系统通知已发送')
+          setNoticeState(prev => ({
+            ...prev,
             open: false,
             account: null,
             content: '',
-            sendType: noticeState.sendType,
-          })
+          }))
         }}
       >
-        <Input.TextArea
-          maxLength={1000}
-          rows={6}
-          value={noticeState.content}
-          placeholder="请输入通知内容（最多1000字）"
-          onChange={event => setNoticeState(prev => ({ ...prev, content: event.target.value }))}
-        />
+        <Space direction="vertical" size={10} className="w-full">
+          <Input
+            maxLength={100}
+            value={noticeState.title}
+            placeholder="通知标题（最多100字）"
+            onChange={event => setNoticeState(prev => ({ ...prev, title: event.target.value }))}
+          />
+          <Input.TextArea
+            maxLength={1000}
+            rows={6}
+            value={noticeState.content}
+            placeholder="请输入通知内容（最多1000字）"
+            onChange={event => setNoticeState(prev => ({ ...prev, content: event.target.value }))}
+          />
+        </Space>
       </Modal>
     </Space>
   )

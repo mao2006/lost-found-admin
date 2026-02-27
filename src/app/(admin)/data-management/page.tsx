@@ -1,69 +1,75 @@
 'use client'
 
-import type { AccountRecord, ComplaintFeedback, ReviewPublishPost } from '@/mock/system-admin'
+import { useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, Descriptions, Empty, Flex, Modal, Radio, Segmented, Space, Tag, Typography } from 'antd'
 import { useMemo, useState } from 'react'
-import { COMPLAINT_FEEDBACKS, REVIEW_PUBLISH_POSTS, SYSTEM_ACCOUNTS, SYSTEM_ITEMS } from '@/mock/system-admin'
+import { normalizePostStatus, toCampusName } from '@/api/shared/transforms'
+import { useDisableAccountMutation } from '@/query/account'
+import { useDeleteAdminPostMutation } from '@/query/admin'
+import { useFeedbackDetailQuery, useFeedbackListQuery, useProcessFeedbackMutation } from '@/query/feedback'
+import { usePostListQuery } from '@/query/post'
+import { queryKeys } from '@/query/query-keys'
 import { formatDateTime } from '@/utils/admin-mock'
 
 type MainTab = 'all_info' | 'feedback'
 type DisableDuration = '7d' | '1m' | '6m' | '1y'
 
-const EXPIRED_STATUS_SET = new Set(['archived', 'pending_deleted', 'approved_canceled'])
+const EXPIRED_STATUS_KEYS = ['archived', 'pending_deleted', 'approved_canceled', 'deleted', 'cancel']
 
-function buildDisabledUntil(duration: DisableDuration) {
-  const nextDate = new Date()
-  const daysMap: Record<DisableDuration, number> = {
-    '7d': 7,
-    '1m': 30,
-    '6m': 180,
-    '1y': 365,
-  }
-  nextDate.setDate(nextDate.getDate() + daysMap[duration])
-  return nextDate.toISOString()
+function toDurationParam(value: DisableDuration) {
+  const map = {
+    '7d': '7days',
+    '1m': '1month',
+    '6m': '6months',
+    '1y': '1year',
+  } as const
+
+  return map[value]
 }
 
 export default function DataManagementPage() {
   const { message } = App.useApp()
+  const queryClient = useQueryClient()
+
   const [activeTab, setActiveTab] = useState<MainTab>('all_info')
   const [showExpiredData, setShowExpiredData] = useState(false)
   const [isClearModalOpen, setIsClearModalOpen] = useState(false)
-  const [items, setItems] = useState([...SYSTEM_ITEMS])
+  const [hiddenPostIds, setHiddenPostIds] = useState<number[]>([])
 
-  const [posts, setPosts] = useState<ReviewPublishPost[]>([...REVIEW_PUBLISH_POSTS])
-  const [accounts, setAccounts] = useState<AccountRecord[]>([...SYSTEM_ACCOUNTS])
-  const [feedbacks] = useState<ComplaintFeedback[]>([...COMPLAINT_FEEDBACKS])
-  const [selectedFeedbackId, setSelectedFeedbackId] = useState<string | null>(null)
+  const [selectedFeedbackId, setSelectedFeedbackId] = useState<number | null>(null)
   const [isDisableModalOpen, setIsDisableModalOpen] = useState(false)
   const [disableDuration, setDisableDuration] = useState<DisableDuration | null>(null)
 
-  const visibleItems = useMemo(() => {
-    const source = showExpiredData
-      ? items.filter(item => EXPIRED_STATUS_SET.has(item.status))
-      : items
+  const postListQuery = usePostListQuery({ page: 1, page_size: 300 })
+  const feedbackListQuery = useFeedbackListQuery()
+  const feedbackDetailQuery = useFeedbackDetailQuery(selectedFeedbackId)
 
-    return [...source].sort((a, b) => new Date(b.eventTime).getTime() - new Date(a.eventTime).getTime())
-  }, [items, showExpiredData])
+  const processFeedbackMutation = useProcessFeedbackMutation()
+  const deletePostMutation = useDeleteAdminPostMutation()
+  const disableAccountMutation = useDisableAccountMutation()
+
+  const visibleItems = useMemo(() => {
+    const source = (postListQuery.data?.list ?? []).filter(item => !hiddenPostIds.includes(item.id))
+
+    if (!showExpiredData) {
+      return [...source].sort((a, b) => new Date(b.event_time).getTime() - new Date(a.event_time).getTime())
+    }
+
+    return source
+      .filter((item) => {
+        const status = normalizePostStatus(item.status)
+        return EXPIRED_STATUS_KEYS.some(key => status.includes(key))
+      })
+      .sort((a, b) => new Date(b.event_time).getTime() - new Date(a.event_time).getTime())
+  }, [hiddenPostIds, postListQuery.data?.list, showExpiredData])
 
   const sortedFeedbacks = useMemo(
-    () => [...feedbacks].sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime()),
-    [feedbacks],
+    () => [...(feedbackListQuery.data?.list ?? [])].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    [feedbackListQuery.data?.list],
   )
 
-  const selectedFeedback = useMemo(
-    () => sortedFeedbacks.find(item => item.id === selectedFeedbackId) ?? null,
-    [selectedFeedbackId, sortedFeedbacks],
-  )
-
-  const selectedPost = useMemo(
-    () => posts.find(post => post.id === selectedFeedback?.postId) ?? null,
-    [posts, selectedFeedback?.postId],
-  )
-
-  const reportedAccount = useMemo(
-    () => accounts.find(account => account.userNo === selectedFeedback?.accountNo) ?? null,
-    [accounts, selectedFeedback?.accountNo],
-  )
+  const selectedFeedback = feedbackDetailQuery.data
+  const relatedPost = selectedFeedback?.post
 
   return (
     <Space direction="vertical" size={16} className="w-full">
@@ -87,26 +93,20 @@ export default function DataManagementPage() {
         <Space direction="vertical" size={16} className="w-full">
           <Card>
             <Flex wrap gap={10}>
-              <Button onClick={() => message.success('系统数据备份完成')}>备份</Button>
-              <Button onClick={() => message.success('系统数据导出成功')}>导出</Button>
-              <Button
-                type={showExpiredData ? 'primary' : 'default'}
-                onClick={() => setShowExpiredData(prev => !prev)}
-              >
+              <Button onClick={() => message.success('已触发数据备份流程（可继续接后端文件接口）')}>备份</Button>
+              <Button onClick={() => message.success('已触发数据导出流程（可继续接后端文件接口）')}>导出</Button>
+              <Button type={showExpiredData ? 'primary' : 'default'} onClick={() => setShowExpiredData(prev => !prev)}>
                 过期无效数据
               </Button>
               {showExpiredData && (
-                <Button
-                  danger
-                  onClick={() => setIsClearModalOpen(true)}
-                >
+                <Button danger onClick={() => setIsClearModalOpen(true)}>
                   清理
                 </Button>
               )}
             </Flex>
           </Card>
 
-          <Card title={showExpiredData ? '过期无效信息总览' : '全校失物招领信息总览'}>
+          <Card title={showExpiredData ? '过期无效信息总览' : '全校失物招领信息总览'} loading={postListQuery.isLoading}>
             <Space direction="vertical" size={10} className="w-full">
               {visibleItems.length === 0 && <Empty description="暂无数据" />}
               {visibleItems.map(item => (
@@ -117,17 +117,17 @@ export default function DataManagementPage() {
                 >
                   <Flex justify="space-between" align="center" className="w-full gap-2">
                     <Space wrap>
-                      <Tag color="blue">{item.itemType}</Tag>
-                      <Typography.Text>{item.itemName}</Typography.Text>
+                      <Tag color="blue">{item.item_type_other || item.item_type}</Tag>
+                      <Typography.Text>{item.item_name}</Typography.Text>
                       <Typography.Text type="secondary">
-                        {item.campus}
+                        {toCampusName(item.campus) ?? item.campus}
                         {' '}
                         ·
                         {' '}
-                        {item.locationDetail}
+                        {item.location}
                       </Typography.Text>
                     </Space>
-                    <Typography.Text type="secondary">{formatDateTime(item.eventTime)}</Typography.Text>
+                    <Typography.Text type="secondary">{formatDateTime(item.event_time)}</Typography.Text>
                   </Flex>
                 </Button>
               ))}
@@ -138,8 +138,8 @@ export default function DataManagementPage() {
 
       {activeTab === 'feedback' && (
         <Space direction="vertical" size={16} className="w-full">
-          {!selectedFeedback && (
-            <Card title="用户投诉与反馈列表">
+          {!selectedFeedbackId && (
+            <Card title="用户投诉与反馈列表" loading={feedbackListQuery.isLoading}>
               <Space direction="vertical" size={10} className="w-full">
                 {sortedFeedbacks.length === 0 && <Empty description="暂无投诉反馈" />}
                 {sortedFeedbacks.map(feedback => (
@@ -151,10 +151,13 @@ export default function DataManagementPage() {
                   >
                     <Flex justify="space-between" align="center" className="w-full gap-2">
                       <Space wrap>
-                        <Tag color="warning">{feedback.complaintType}</Tag>
-                        <Typography.Text>{feedback.accountName}</Typography.Text>
+                        <Tag color="warning">{feedback.type_other || feedback.type}</Tag>
+                        <Typography.Text>
+                          举报人ID：
+                          {feedback.reporter_id}
+                        </Typography.Text>
                       </Space>
-                      <Typography.Text type="secondary">{formatDateTime(feedback.postedAt)}</Typography.Text>
+                      <Typography.Text type="secondary">{formatDateTime(feedback.created_at)}</Typography.Text>
                     </Flex>
                   </Button>
                 ))}
@@ -162,60 +165,89 @@ export default function DataManagementPage() {
             </Card>
           )}
 
-          {selectedFeedback && (
-            <Card title="投诉反馈详情">
-              <Space direction="vertical" size={16} className="w-full">
-                <Descriptions
-                  bordered
-                  column={1}
-                  title="投诉与反馈"
-                  items={[
-                    { key: 'type', label: '投诉类型', children: selectedFeedback.complaintType },
-                    { key: 'time', label: '时间', children: formatDateTime(selectedFeedback.postedAt) },
-                    { key: 'desc', label: '说明', children: selectedFeedback.description },
-                    { key: 'user', label: '投诉人', children: `${selectedFeedback.accountName}（${selectedFeedback.accountNo}）` },
-                  ]}
-                />
+          {selectedFeedbackId && (
+            <Card title="投诉反馈详情" loading={feedbackDetailQuery.isLoading}>
+              {selectedFeedback && (
+                <Space direction="vertical" size={16} className="w-full">
+                  <Descriptions
+                    bordered
+                    column={1}
+                    title="投诉与反馈"
+                    items={[
+                      { key: 'type', label: '投诉类型', children: selectedFeedback.type_other || selectedFeedback.type },
+                      { key: 'time', label: '时间', children: formatDateTime(selectedFeedback.created_at) },
+                      { key: 'desc', label: '说明', children: selectedFeedback.description },
+                      { key: 'user', label: '投诉人', children: `用户ID ${selectedFeedback.reporter_id}` },
+                      { key: 'processed', label: '处理状态', children: selectedFeedback.processed ? '已处理' : '待处理' },
+                    ]}
+                  />
 
-                <Descriptions
-                  bordered
-                  column={{ xs: 1, md: 2 }}
-                  title="被反馈物品详情"
-                  items={[
-                    { key: 'name', label: '物品名称', children: selectedPost?.itemName ?? '已删除' },
-                    { key: 'type', label: '物品类型', children: selectedPost?.itemType ?? '-' },
-                    { key: 'campus', label: '校区', children: selectedPost?.campus ?? '-' },
-                    { key: 'location', label: '地点', children: selectedPost?.locationDetail ?? '-' },
-                    { key: 'time', label: '时间', children: selectedPost ? formatDateTime(selectedPost.eventTime) : '-' },
-                    { key: 'contact', label: '联系方式', children: selectedPost?.contactPhone ?? '-' },
-                  ]}
-                />
+                  <Descriptions
+                    bordered
+                    column={{ xs: 1, md: 2 }}
+                    title="被反馈物品详情"
+                    items={[
+                      { key: 'name', label: '物品名称', children: relatedPost?.item_name ?? '已删除' },
+                      { key: 'type', label: '物品类型', children: relatedPost?.item_type ?? '-' },
+                      { key: 'campus', label: '校区', children: toCampusName(relatedPost?.campus) ?? relatedPost?.campus ?? '-' },
+                      { key: 'location', label: '地点', children: relatedPost?.location ?? '-' },
+                      { key: 'status', label: '状态', children: relatedPost?.status ?? '-' },
+                    ]}
+                  />
 
-                <Flex wrap gap={10}>
-                  <Button
-                    danger
-                    type="primary"
-                    onClick={() => {
-                      if (!selectedPost)
-                        return
-                      setPosts(prev => prev.filter(post => post.id !== selectedPost.id))
-                      message.success('该帖子已删除')
-                    }}
-                  >
-                    删除该帖子
-                  </Button>
-                  <Button
-                    disabled={!reportedAccount}
-                    onClick={() => {
-                      setIsDisableModalOpen(true)
-                      setDisableDuration(null)
-                    }}
-                  >
-                    禁用被投诉的账号
-                  </Button>
-                  <Button onClick={() => setSelectedFeedbackId(null)}>返回</Button>
-                </Flex>
-              </Space>
+                  <Flex wrap gap={10}>
+                    <Button
+                      danger
+                      type="primary"
+                      loading={deletePostMutation.isPending}
+                      disabled={!relatedPost}
+                      onClick={async () => {
+                        if (!relatedPost)
+                          return
+
+                        await deletePostMutation.mutateAsync({ post_id: relatedPost.id })
+                        message.success('该帖子已删除')
+
+                        await Promise.all([
+                          queryClient.invalidateQueries({ queryKey: ['post', 'list'] }),
+                          queryClient.invalidateQueries({ queryKey: queryKeys.feedback.detail(selectedFeedbackId) }),
+                        ])
+                      }}
+                    >
+                      删除该帖子
+                    </Button>
+
+                    <Button
+                      disabled={!relatedPost || disableAccountMutation.isPending}
+                      onClick={() => {
+                        setIsDisableModalOpen(true)
+                        setDisableDuration(null)
+                      }}
+                    >
+                      禁用被投诉的账号
+                    </Button>
+
+                    <Button
+                      type="primary"
+                      loading={processFeedbackMutation.isPending}
+                      disabled={selectedFeedback.processed}
+                      onClick={async () => {
+                        await processFeedbackMutation.mutateAsync({ feedback_id: selectedFeedback.id })
+                        message.success('投诉反馈已处理')
+
+                        await Promise.all([
+                          queryClient.invalidateQueries({ queryKey: queryKeys.feedback.list() }),
+                          queryClient.invalidateQueries({ queryKey: queryKeys.feedback.detail(selectedFeedback.id) }),
+                        ])
+                      }}
+                    >
+                      标记已处理
+                    </Button>
+
+                    <Button onClick={() => setSelectedFeedbackId(null)}>返回</Button>
+                  </Flex>
+                </Space>
+              )}
             </Card>
           )}
         </Space>
@@ -228,34 +260,37 @@ export default function DataManagementPage() {
         cancelText="返回"
         onCancel={() => setIsClearModalOpen(false)}
         onOk={() => {
-          setItems(prev => prev.filter(item => !EXPIRED_STATUS_SET.has(item.status)))
+          const expiredIds = visibleItems.map(item => item.id)
+          setHiddenPostIds(prev => Array.from(new Set([...prev, ...expiredIds])))
           setIsClearModalOpen(false)
-          message.success('过期无效数据清理完成')
+          message.success('过期无效数据清理完成（当前为前端隐藏，可继续接后端清理接口）')
         }}
       >
         <Typography.Text>清理后数据不可恢复，是否继续？</Typography.Text>
       </Modal>
 
       <Modal
-        title={reportedAccount ? `禁用账号：${reportedAccount.name}` : '禁用账号'}
+        title={relatedPost ? '禁用账号' : '禁用账号'}
         open={isDisableModalOpen}
         okText="确认"
         cancelText="返回"
-        okButtonProps={{ disabled: !disableDuration }}
+        okButtonProps={{ disabled: !disableDuration, loading: disableAccountMutation.isPending }}
         onCancel={() => {
+          if (disableAccountMutation.isPending)
+            return
+
           setIsDisableModalOpen(false)
           setDisableDuration(null)
         }}
-        onOk={() => {
-          if (!reportedAccount || !disableDuration)
+        onOk={async () => {
+          if (!relatedPost || !disableDuration)
             return
 
-          const disabledUntil = buildDisabledUntil(disableDuration)
-          setAccounts(prev => prev.map(account => (
-            account.id === reportedAccount.id
-              ? { ...account, disabledUntil }
-              : account
-          )))
+          await disableAccountMutation.mutateAsync({
+            duration: toDurationParam(disableDuration),
+            id: relatedPost.publisher_id,
+          })
+
           setIsDisableModalOpen(false)
           setDisableDuration(null)
           message.success('该账号已禁用')

@@ -1,10 +1,11 @@
 'use client'
 
-import type { AdminRole } from '@/constants/admin-access'
 import { App, Button, Card, Form, Input, Modal, Space, Typography } from 'antd'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { resolveErrorMessage } from '@/api/core/errors'
 import { ADMIN_ROLE_LABEL, getDefaultRouteByRole } from '@/constants/admin-access'
+import { useLoginMutation, useResetPasswordMutation } from '@/query/auth'
 import { useAuthStore } from '@/stores/use-auth-store'
 
 const { Text, Title } = Typography
@@ -21,16 +22,6 @@ interface ForgotPasswordFormValues {
   confirmPassword: string
   newPassword: string
   oldPassword: string
-  studentNo: string
-}
-
-function resolveRoleByEmployeeNo(employeeNo: string): AdminRole {
-  if (employeeNo === '1')
-    return 'lost_found_admin'
-  if (employeeNo === '2')
-    return 'system_admin'
-
-  return Math.random() > 0.5 ? 'system_admin' : 'lost_found_admin'
 }
 
 export default function LoginPage() {
@@ -40,9 +31,9 @@ export default function LoginPage() {
   const isLoggedIn = useAuthStore(state => state.isLoggedIn)
   const role = useAuthStore(state => state.role)
   const [forgotPasswordForm] = Form.useForm<ForgotPasswordFormValues>()
-  const [isSubmitting, setIsSubmitting] = useState(false)
   const [isForgotOpen, setIsForgotOpen] = useState(false)
-  const [isForgotSubmitting, setIsForgotSubmitting] = useState(false)
+  const loginMutation = useLoginMutation()
+  const resetPasswordMutation = useResetPasswordMutation()
 
   useEffect(() => {
     if (isLoggedIn && role) {
@@ -61,28 +52,39 @@ export default function LoginPage() {
   }
 
   const handleLogin = async (values: LoginFormValues) => {
-    setIsSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 450))
-    setIsSubmitting(false)
+    try {
+      const result = await loginMutation.mutateAsync({
+        employeeNo: values.employeeNo.trim(),
+        password: values.password,
+      })
 
-    const employeeNo = values.employeeNo.trim()
-    const loginRole = resolveRoleByEmployeeNo(employeeNo)
-
-    login({
-      employeeNo,
-      role: loginRole,
-    })
-    message.success(`登录成功，当前身份：${ADMIN_ROLE_LABEL[loginRole]}`)
-    router.push(getDefaultRouteByRole(loginRole))
+      login({
+        employeeNo: result.employeeNo,
+        role: result.role,
+        token: result.token,
+        userId: result.userId,
+      })
+      message.success(`登录成功，当前身份：${ADMIN_ROLE_LABEL[result.role]}`)
+      if (result.needUpdatePassword) {
+        message.info('该账号需要先修改密码，建议尽快在登录页完成密码更新。')
+      }
+      router.push(getDefaultRouteByRole(result.role))
+    }
+    catch (error) {
+      message.error(resolveErrorMessage(error, '登录失败，请稍后再试'))
+    }
   }
 
-  const handleForgotConfirm = async (_values: ForgotPasswordFormValues) => {
-    setIsForgotSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 450))
-    setIsForgotSubmitting(false)
-    message.success('密码修改成功')
-    setIsForgotOpen(false)
-    forgotPasswordForm.resetFields()
+  const handleForgotConfirm = async (values: ForgotPasswordFormValues) => {
+    try {
+      await resetPasswordMutation.mutateAsync(values)
+      message.success('密码修改成功')
+      setIsForgotOpen(false)
+      forgotPasswordForm.resetFields()
+    }
+    catch (error) {
+      message.error(resolveErrorMessage(error, '密码修改失败，请稍后再试'))
+    }
   }
 
   return (
@@ -122,7 +124,7 @@ export default function LoginPage() {
           onFinish={handleLogin}
         >
           <Text type="secondary" className="!mb-4 !block">
-            账号 1 默认进入失物招领管理员，账号 2 默认进入系统管理员，其它账号随机分流。
+            请输入后端已分配的工号与密码进行登录。
           </Text>
 
           <Form.Item
@@ -144,7 +146,7 @@ export default function LoginPage() {
           </Form.Item>
 
           <Form.Item className="!mb-3">
-            <Button type="primary" htmlType="submit" block loading={isSubmitting}>
+            <Button type="primary" htmlType="submit" block loading={loginMutation.isPending}>
               登录
             </Button>
           </Form.Item>
@@ -168,7 +170,7 @@ export default function LoginPage() {
         onOk={() => forgotPasswordForm.submit()}
         okText="确认"
         cancelText="取消"
-        confirmLoading={isForgotSubmitting}
+        confirmLoading={resetPasswordMutation.isPending}
         destroyOnHidden
       >
         <Space direction="vertical" size={2} className="mb-4 w-full">
@@ -183,15 +185,6 @@ export default function LoginPage() {
           onFinish={handleForgotConfirm}
           autoComplete="off"
         >
-          <Form.Item
-            className="!mb-3"
-            label="学号"
-            name="studentNo"
-            rules={[{ required: true, message: '请输入学号' }]}
-          >
-            <Input placeholder="请输入学号" autoComplete="off" />
-          </Form.Item>
-
           <Form.Item
             className="!mb-3"
             label="原密码"
