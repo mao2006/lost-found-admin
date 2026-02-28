@@ -1,11 +1,11 @@
 'use client'
 
 import type { MenuProps } from 'antd'
-import { HomeOutlined, LogoutOutlined } from '@ant-design/icons'
+import { LogoutOutlined } from '@ant-design/icons'
 import { Button, Menu, Modal, Space, Tag, Typography } from 'antd'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { ADMIN_ROLE_LABEL, getAdminNavByRole, getDefaultRouteByRole } from '@/constants/admin-access'
+import { ADMIN_ROLE_LABEL, getAdminNavByRole } from '@/constants/admin-access'
 import { useAuthStore } from '@/stores/use-auth-store'
 
 export function AdminTopNav() {
@@ -18,8 +18,7 @@ export function AdminTopNav() {
     return null
 
   const navRoutes = getAdminNavByRole(role)
-  const homePath = getDefaultRouteByRole(role)
-  const selectedKey = navRoutes.find(item => pathname.startsWith(item.key))?.key ?? homePath
+  const selectedKey = navRoutes.find(item => pathname.startsWith(item.key))?.key ?? navRoutes[0]?.key ?? ''
 
   const items: MenuProps['items'] = navRoutes.map(item => ({
     key: item.key,
@@ -43,11 +42,6 @@ export function AdminTopNav() {
     <header className="z-30 border-b border-sky-100 bg-white/90 backdrop-blur">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-3 md:grid md:h-16 md:grid-cols-[1fr_auto_1fr] md:items-center md:gap-3 md:px-6 md:py-0">
         <Space align="center" size={10} className="justify-self-start">
-          <Button
-            aria-label="返回主页"
-            icon={<HomeOutlined />}
-            onClick={() => router.push(homePath)}
-          />
           <div className="flex items-center gap-2">
             <Typography.Title level={5} className="!mb-0 !text-slate-900">
               失物招领管理平台
