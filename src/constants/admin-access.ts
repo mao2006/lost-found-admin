@@ -20,7 +20,6 @@ export const ADMIN_NAV_BY_ROLE: Record<AdminRole, AdminNavItem[]> = {
     { key: '/global-management', label: '全局管理' },
     { key: '/account-permission', label: '账号与权限管理' },
     { key: '/announcement-content', label: '公告与内容管理' },
-    { key: '/data-management', label: '数据管理' },
   ],
 }
 
@@ -31,7 +30,7 @@ export const DEFAULT_ROUTE_BY_ROLE: Record<AdminRole, string> = {
 
 const ADMIN_ALLOWED_ROUTE_PREFIXES: Record<AdminRole, string[]> = {
   lost_found_admin: ['/review-publish', '/item-status', '/info-maintenance'],
-  system_admin: ['/global-management', '/account-permission', '/announcement-content', '/data-management'],
+  system_admin: ['/global-management', '/account-permission', '/announcement-content'],
 }
 
 export function hasAdminRouteAccess(role: AdminRole, pathname: string) {

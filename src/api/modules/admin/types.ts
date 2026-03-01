@@ -1,4 +1,6 @@
 export interface AdminPendingListRequest {
+  Page?: number
+  PageSize?: number
   page?: number
   page_size?: number
 }

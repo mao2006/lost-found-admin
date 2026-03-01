@@ -11,9 +11,17 @@ import type {
 import { request } from '@/api/core/request'
 
 export function getAdminPendingPostList(params: AdminPendingListRequest = {}) {
+  const page = params.page ?? params.Page
+  const pageSize = params.page_size ?? params.PageSize
+
   return request<AdminPendingListResponse>({
     method: 'GET',
-    params,
+    params: {
+      Page: page,
+      PageSize: pageSize,
+      page,
+      page_size: pageSize,
+    },
     url: '/admin/list',
   })
 }

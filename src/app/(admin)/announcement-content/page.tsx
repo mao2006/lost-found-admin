@@ -1,45 +1,63 @@
 'use client'
 
+import { ExclamationCircleOutlined } from '@ant-design/icons'
 import { useQueryClient } from '@tanstack/react-query'
-import { App, Button, Card, Descriptions, Empty, Flex, Image, Input, Segmented, Space, Tag, Typography } from 'antd'
+import { App, Button, Card, Descriptions, Empty, Flex, Image, Input, Modal, Radio, Segmented, Space, Tag, Typography } from 'antd'
 import { useMemo, useState } from 'react'
-import { toPublishKind } from '@/api/shared/transforms'
-import { useAdminPendingDetailQuery, useDeleteAdminPostMutation } from '@/query/admin'
+import { toCampusName, toDisableDurationParam, toPublishKind } from '@/api/shared/transforms'
+import { useDisableAccountMutation } from '@/query/account'
+import {
+  useAdminPendingDetailQuery,
+  useAdminPendingListQuery,
+  useApproveAdminPostMutation,
+  useDeleteAdminPostMutation,
+  useRejectAdminPostMutation,
+} from '@/query/admin'
 import { useAnnouncementReviewListQuery, useApproveAnnouncementMutation, usePublishAnnouncementMutation } from '@/query/announcement'
-import { usePostListQuery } from '@/query/post'
+import { useFeedbackDetailQuery, useFeedbackListQuery, useProcessFeedbackMutation } from '@/query/feedback'
 import { queryKeys } from '@/query/query-keys'
 import { formatDate, formatDateTime, getBeijingTimestamp } from '@/utils/admin-mock'
 
 const { TextArea } = Input
 
-type MainTab = 'global' | 'regional' | 'review'
-type PublishKind = 'lost' | 'found'
-
-const KIND_LABEL: Record<PublishKind, string> = {
+type MainTab = 'global' | 'regional' | 'review' | 'feedback'
+type DisableDuration = '7d' | '1m' | '6m' | '1y'
+const KIND_LABEL = {
   lost: '失物',
   found: '招领',
-}
+} as const
 
 export default function AnnouncementContentPage() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const queryClient = useQueryClient()
 
-  const [activeTab, setActiveTab] = useState<MainTab>('global')
+  const [activeTab, setActiveTab] = useState<MainTab>('review')
 
   const [globalTitle, setGlobalTitle] = useState('系统公告')
   const [globalContent, setGlobalContent] = useState('')
 
   const [selectedAnnouncementId, setSelectedAnnouncementId] = useState<number | null>(null)
 
-  const [postKind, setPostKind] = useState<PublishKind>('lost')
   const [selectedPostId, setSelectedPostId] = useState<number | null>(null)
+  const [showRejectModal, setShowRejectModal] = useState(false)
+  const [rejectReason, setRejectReason] = useState('')
+  const [selectedFeedbackId, setSelectedFeedbackId] = useState<number | null>(null)
+  const [isDisableModalOpen, setIsDisableModalOpen] = useState(false)
+  const [disableDuration, setDisableDuration] = useState<DisableDuration | null>(null)
 
   const reviewListQuery = useAnnouncementReviewListQuery()
   const publishMutation = usePublishAnnouncementMutation()
   const approveMutation = useApproveAnnouncementMutation()
 
-  const postListQuery = usePostListQuery({ page: 1, page_size: 20 })
+  const feedbackListQuery = useFeedbackListQuery()
+  const feedbackDetailQuery = useFeedbackDetailQuery(selectedFeedbackId)
+  const processFeedbackMutation = useProcessFeedbackMutation()
+  const disableAccountMutation = useDisableAccountMutation()
+
+  const postListQuery = useAdminPendingListQuery()
   const postDetailQuery = useAdminPendingDetailQuery(selectedPostId)
+  const approvePostMutation = useApproveAdminPostMutation()
+  const rejectPostMutation = useRejectAdminPostMutation()
   const deletePostMutation = useDeleteAdminPostMutation()
 
   const sortedAnnouncements = useMemo(
@@ -55,10 +73,18 @@ export default function AnnouncementContentPage() {
 
   const visibleReviewPosts = useMemo(
     () => (postListQuery.data?.list ?? [])
-      .filter(post => toPublishKind(post.publish_type) === postKind)
       .sort((a, b) => getBeijingTimestamp(b.event_time) - getBeijingTimestamp(a.event_time)),
-    [postKind, postListQuery.data?.list],
+    [postListQuery.data?.list],
   )
+
+  const sortedFeedbacks = useMemo(
+    () => [...(feedbackListQuery.data?.list ?? [])]
+      .sort((a, b) => getBeijingTimestamp(b.created_at) - getBeijingTimestamp(a.created_at)),
+    [feedbackListQuery.data?.list],
+  )
+
+  const selectedFeedback = feedbackDetailQuery.data
+  const relatedPost = selectedFeedback?.post
 
   const handleApproveAnnouncement = async () => {
     if (!selectedAnnouncement)
@@ -74,14 +100,99 @@ export default function AnnouncementContentPage() {
     if (!selectedPostId)
       return
 
-    await deletePostMutation.mutateAsync({ post_id: selectedPostId })
-    setSelectedPostId(null)
-    message.success('发布信息已删除')
+    if (deletePostMutation.isPending)
+      return
 
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['post', 'list'] }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.admin.pendingList() }),
-    ])
+    const postId = selectedPostId
+    const itemName = postDetailQuery.data?.item_name ?? `ID ${postId}`
+
+    modal.confirm({
+      title: '确认删除发布信息？',
+      content: `删除后不可恢复：${itemName}`,
+      okText: '确认删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true, type: 'primary' },
+      icon: <ExclamationCircleOutlined />,
+      onOk: async () => {
+        await deletePostMutation.mutateAsync({ post_id: postId })
+        setSelectedPostId(null)
+        message.success('发布信息已删除')
+
+        await queryClient.invalidateQueries({ queryKey: queryKeys.admin.pendingList() })
+      },
+    })
+  }
+
+  const handleDeleteFeedbackPost = async () => {
+    if (!relatedPost)
+      return
+
+    if (deletePostMutation.isPending)
+      return
+
+    const postId = relatedPost.id
+    const itemName = relatedPost.item_name || `ID ${postId}`
+
+    modal.confirm({
+      title: '确认删除该帖子？',
+      content: `删除后不可恢复：${itemName}`,
+      okText: '确认删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true, type: 'primary' },
+      icon: <ExclamationCircleOutlined />,
+      onOk: async () => {
+        await deletePostMutation.mutateAsync({ post_id: postId })
+        message.success('该帖子已删除')
+
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ['post', 'list'] }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.admin.pendingList() }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.feedback.list() }),
+          queryClient.invalidateQueries({ queryKey: queryKeys.feedback.detail(selectedFeedbackId) }),
+        ])
+      },
+    })
+  }
+
+  const closeRejectModal = () => {
+    if (rejectPostMutation.isPending)
+      return
+
+    setShowRejectModal(false)
+    setRejectReason('')
+  }
+
+  const handleApprovePost = async () => {
+    if (!selectedPostId)
+      return
+
+    if (approvePostMutation.isPending || rejectPostMutation.isPending || deletePostMutation.isPending)
+      return
+
+    await approvePostMutation.mutateAsync({ post_id: selectedPostId })
+    setSelectedPostId(null)
+    message.success('发布信息审核通过')
+
+    await queryClient.invalidateQueries({ queryKey: queryKeys.admin.pendingList() })
+  }
+
+  const handleRejectPost = async () => {
+    if (!selectedPostId)
+      return
+
+    const reason = rejectReason.trim()
+    if (!reason) {
+      message.warning('请填写驳回理由')
+      return
+    }
+
+    await rejectPostMutation.mutateAsync({ post_id: selectedPostId, reason })
+    setShowRejectModal(false)
+    setRejectReason('')
+    setSelectedPostId(null)
+    message.success('发布信息审核驳回')
+
+    await queryClient.invalidateQueries({ queryKey: queryKeys.admin.pendingList() })
   }
 
   return (
@@ -91,9 +202,10 @@ export default function AnnouncementContentPage() {
           block
           value={activeTab}
           options={[
+            { label: '审核发布信息', value: 'review' },
             { label: '发布全局公告', value: 'global' },
             { label: '审核区域公告', value: 'regional' },
-            { label: '审核发布信息', value: 'review' },
+            { label: '投诉与反馈', value: 'feedback' },
           ]}
           onChange={value => setActiveTab(value as MainTab)}
         />
@@ -188,17 +300,6 @@ export default function AnnouncementContentPage() {
 
       {activeTab === 'review' && (
         <Space direction="vertical" size={16} className="w-full">
-          <Card>
-            <Segmented
-              value={postKind}
-              options={[
-                { label: '失物', value: 'lost' },
-                { label: '招领', value: 'found' },
-              ]}
-              onChange={value => setPostKind(value as PublishKind)}
-            />
-          </Card>
-
           {!selectedPostId && (
             <Card title="发布信息列表" loading={postListQuery.isLoading}>
               <Space direction="vertical" size={10} className="w-full">
@@ -259,13 +360,161 @@ export default function AnnouncementContentPage() {
                   <Flex gap={10}>
                     <Button onClick={() => setSelectedPostId(null)}>返回</Button>
                     <Button
+                      type="primary"
+                      loading={approvePostMutation.isPending}
+                      disabled={rejectPostMutation.isPending || deletePostMutation.isPending}
+                      onClick={handleApprovePost}
+                    >
+                      审核通过
+                    </Button>
+                    <Button
+                      danger
+                      disabled={approvePostMutation.isPending || rejectPostMutation.isPending || deletePostMutation.isPending}
+                      onClick={() => setShowRejectModal(true)}
+                    >
+                      审核驳回
+                    </Button>
+                    <Button
                       danger
                       type="primary"
                       loading={deletePostMutation.isPending}
+                      disabled={approvePostMutation.isPending || rejectPostMutation.isPending}
                       onClick={handleDeletePost}
                     >
                       删除
                     </Button>
+                  </Flex>
+
+                  <Modal
+                    title="审核驳回"
+                    open={showRejectModal}
+                    okText="确认驳回"
+                    cancelText="取消"
+                    onCancel={closeRejectModal}
+                    onOk={handleRejectPost}
+                    okButtonProps={{ danger: true, loading: rejectPostMutation.isPending, disabled: !rejectReason.trim() }}
+                    cancelButtonProps={{ disabled: rejectPostMutation.isPending }}
+                    maskClosable={!rejectPostMutation.isPending}
+                    closable={!rejectPostMutation.isPending}
+                    destroyOnHidden
+                  >
+                    <Space direction="vertical" size={8} className="w-full">
+                      <Typography.Text type="secondary">请填写驳回理由（最多 500 字）</Typography.Text>
+                      <TextArea
+                        value={rejectReason}
+                        maxLength={500}
+                        showCount
+                        autoSize={{ minRows: 4, maxRows: 6 }}
+                        placeholder="请输入驳回理由"
+                        onChange={event => setRejectReason(event.target.value)}
+                      />
+                    </Space>
+                  </Modal>
+                </Space>
+              )}
+            </Card>
+          )}
+        </Space>
+      )}
+
+      {activeTab === 'feedback' && (
+        <Space direction="vertical" size={16} className="w-full">
+          {!selectedFeedbackId && (
+            <Card title="用户投诉与反馈列表" loading={feedbackListQuery.isLoading}>
+              <Space direction="vertical" size={10} className="w-full">
+                {sortedFeedbacks.length === 0 && <Empty description="暂无投诉反馈" />}
+                {sortedFeedbacks.map(feedback => (
+                  <Button
+                    key={feedback.id}
+                    block
+                    className="!h-auto !justify-start !rounded-lg !border-sky-100 !px-4 !py-3 !text-left"
+                    onClick={() => setSelectedFeedbackId(feedback.id)}
+                  >
+                    <Flex justify="space-between" align="center" className="w-full gap-2">
+                      <Space wrap>
+                        <Tag color="warning">{feedback.type}</Tag>
+                        <Typography.Text>
+                          举报人ID：
+                          {feedback.reporter_id}
+                        </Typography.Text>
+                      </Space>
+                      <Typography.Text type="secondary">{formatDateTime(feedback.created_at)}</Typography.Text>
+                    </Flex>
+                  </Button>
+                ))}
+              </Space>
+            </Card>
+          )}
+
+          {selectedFeedbackId && (
+            <Card title="投诉反馈详情" loading={feedbackDetailQuery.isLoading}>
+              {selectedFeedback && (
+                <Space direction="vertical" size={16} className="w-full">
+                  <Descriptions
+                    bordered
+                    column={1}
+                    title="投诉与反馈"
+                    items={[
+                      { key: 'type', label: '投诉类型', children: selectedFeedback.type },
+                      { key: 'time', label: '时间', children: formatDateTime(selectedFeedback.created_at) },
+                      { key: 'desc', label: '说明', children: selectedFeedback.description },
+                      { key: 'user', label: '投诉人', children: `用户ID ${selectedFeedback.reporter_id}` },
+                      { key: 'processed', label: '处理状态', children: selectedFeedback.processed ? '已处理' : '待处理' },
+                    ]}
+                  />
+
+                  <Descriptions
+                    bordered
+                    column={{ xs: 1, md: 2 }}
+                    title="被反馈物品详情"
+                    items={[
+                      { key: 'name', label: '物品名称', children: relatedPost?.item_name ?? '已删除' },
+                      { key: 'type', label: '物品类型', children: relatedPost?.item_type ?? '-' },
+                      { key: 'campus', label: '校区', children: toCampusName(relatedPost?.campus) ?? relatedPost?.campus ?? '-' },
+                      { key: 'location', label: '地点', children: relatedPost?.location ?? '-' },
+                      { key: 'status', label: '状态', children: relatedPost?.status ?? '-' },
+                    ]}
+                  />
+
+                  <Flex wrap gap={10}>
+                    <Button
+                      danger
+                      type="primary"
+                      loading={deletePostMutation.isPending}
+                      disabled={!relatedPost || disableAccountMutation.isPending || processFeedbackMutation.isPending}
+                      onClick={handleDeleteFeedbackPost}
+                    >
+                      删除该帖子
+                    </Button>
+
+                    <Button
+                      disabled={!relatedPost || disableAccountMutation.isPending || deletePostMutation.isPending}
+                      onClick={() => {
+                        setIsDisableModalOpen(true)
+                        setDisableDuration(null)
+                      }}
+                    >
+                      禁用被投诉的账号
+                    </Button>
+
+                    <Button
+                      type="primary"
+                      loading={processFeedbackMutation.isPending}
+                      disabled={selectedFeedback.processed || disableAccountMutation.isPending || deletePostMutation.isPending}
+                      onClick={async () => {
+                        await processFeedbackMutation.mutateAsync({ feedback_id: selectedFeedback.id })
+                        message.success('投诉反馈已处理')
+
+                        await Promise.all([
+                          queryClient.invalidateQueries({ queryKey: queryKeys.feedback.list() }),
+                          queryClient.invalidateQueries({ queryKey: queryKeys.feedback.detail(selectedFeedback.id) }),
+                        ])
+                      }}
+                    >
+                      标记已处理
+                    </Button>
+
+                    <Button onClick={() => setSelectedFeedbackId(null)}>返回</Button>
                   </Flex>
                 </Space>
               )}
@@ -273,6 +522,45 @@ export default function AnnouncementContentPage() {
           )}
         </Space>
       )}
+
+      <Modal
+        title="禁用账号"
+        open={isDisableModalOpen}
+        okText="确认"
+        cancelText="返回"
+        okButtonProps={{ disabled: !disableDuration, loading: disableAccountMutation.isPending }}
+        onCancel={() => {
+          if (disableAccountMutation.isPending)
+            return
+
+          setIsDisableModalOpen(false)
+          setDisableDuration(null)
+        }}
+        onOk={async () => {
+          if (!relatedPost || !disableDuration)
+            return
+
+          await disableAccountMutation.mutateAsync({
+            duration: toDisableDurationParam(disableDuration),
+            id: relatedPost.publisher_id,
+          })
+
+          setIsDisableModalOpen(false)
+          setDisableDuration(null)
+          message.success('该账号已禁用')
+        }}
+      >
+        <Radio.Group
+          options={[
+            { label: '7天', value: '7d' },
+            { label: '1个月', value: '1m' },
+            { label: '半年', value: '6m' },
+            { label: '1年', value: '1y' },
+          ]}
+          value={disableDuration}
+          onChange={event => setDisableDuration(event.target.value as DisableDuration)}
+        />
+      </Modal>
     </Space>
   )
 }
