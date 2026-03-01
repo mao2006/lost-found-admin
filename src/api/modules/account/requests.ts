@@ -48,5 +48,3 @@ export function updateAccount(payload: UpdateAccountRequest) {
     url: '/account/update',
   })
 }
-
-

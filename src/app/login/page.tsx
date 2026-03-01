@@ -4,7 +4,7 @@ import { App, Button, Card, Form, Input, Modal, Space, Typography } from 'antd'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { resolveErrorMessage } from '@/api/core/errors'
-import { ADMIN_ROLE_LABEL, getDefaultRouteByRole } from '@/constants/admin-access'
+import { getDefaultRouteByRole } from '@/constants/admin-access'
 import { useLoginMutation, useResetPasswordMutation } from '@/query/auth'
 import { useAuthStore } from '@/stores/use-auth-store'
 
@@ -64,7 +64,7 @@ export default function LoginPage() {
         token: result.token,
         userId: result.userId,
       })
-      message.success(`登录成功，当前身份：${ADMIN_ROLE_LABEL[result.role]}`)
+      message.success('登录成功')
       if (result.needUpdatePassword) {
         message.info('该账号需要先修改密码，建议尽快在登录页完成密码更新。')
       }

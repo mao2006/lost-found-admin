@@ -2,7 +2,9 @@ export interface AccountListRequest {
   page?: number
   page_size?: number
   username?: string
-  user_type?: 'STUDENT' | 'ADMIN' | 'SYSTEM_ADMIN'
+  user_type?: 'STUDENT' | 'SYSTEM_ADMIN'
+  // 下线：普通管理员筛选类型（保留注释便于恢复）
+  // user_type?: 'STUDENT' | 'ADMIN' | 'SYSTEM_ADMIN'
 }
 
 export interface AccountListItem {
@@ -28,7 +30,9 @@ export interface CreateAccountRequest {
   name: string
   password?: string
   username: string
-  user_type: 'STUDENT' | 'ADMIN' | 'SYSTEM_ADMIN'
+  user_type: 'STUDENT' | 'SYSTEM_ADMIN'
+  // 下线：普通管理员创建类型（保留注释便于恢复）
+  // user_type: 'STUDENT' | 'ADMIN' | 'SYSTEM_ADMIN'
 }
 
 export interface CreateAccountResponse {
@@ -48,5 +52,7 @@ export interface UpdateAccountRequest {
   campus?: 'ZHAO_HUI' | 'PING_FENG' | 'MO_GAN_SHAN'
   id: number
   reset_password?: boolean
-  user_type?: 'STUDENT' | 'ADMIN' | 'SYSTEM_ADMIN'
+  user_type?: 'STUDENT' | 'SYSTEM_ADMIN'
+  // 下线：普通管理员更新类型（保留注释便于恢复）
+  // user_type?: 'STUDENT' | 'ADMIN' | 'SYSTEM_ADMIN'
 }

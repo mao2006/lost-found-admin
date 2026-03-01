@@ -2,10 +2,10 @@
 
 import type { MenuProps } from 'antd'
 import { LogoutOutlined } from '@ant-design/icons'
-import { Button, Menu, Modal, Space, Tag, Typography } from 'antd'
+import { Button, Menu, Modal, Space, Typography } from 'antd'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { ADMIN_ROLE_LABEL, getAdminNavByRole } from '@/constants/admin-access'
+import { getAdminNavByRole } from '@/constants/admin-access'
 import { useAuthStore } from '@/stores/use-auth-store'
 
 export function AdminTopNav() {
@@ -46,7 +46,6 @@ export function AdminTopNav() {
             <Typography.Title level={5} className="!mb-0 !text-slate-900">
               失物招领管理平台
             </Typography.Title>
-            <Tag color="blue">{ADMIN_ROLE_LABEL[role]}</Tag>
           </div>
         </Space>
 
